@@ -19,53 +19,72 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck disable=SC1091
 source "$REPO_DIR/versions.env"
 
-ARCH="$(uname -m)"
-OUT_NAME="ccw-elixir-runtime-linux-${ARCH}.tar.gz"
+UNAME_M="$(uname -m)"
+case "$UNAME_M" in
+  x86_64)         ASDF_ARCH=amd64 ;;
+  aarch64|arm64)  ASDF_ARCH=arm64 ;;
+  *) echo "==> unsupported arch: $UNAME_M" >&2; exit 1 ;;
+esac
+OUT_NAME="ccw-elixir-runtime-linux-${UNAME_M}.tar.gz"
 OUT_PATH="/tmp/${OUT_NAME}"
 
 ASDF_DIR="$HOME/.asdf"
 RUNTIME_DIR="$HOME/.ccw-elixir-runtime"
 
+# asdf 0.16+ is a Go binary; data lives in $ASDF_DATA_DIR (defaults to
+# $HOME/.asdf), and shims must be on PATH directly (no asdf.sh anymore).
+export ASDF_DATA_DIR="$ASDF_DIR"
+export PATH="$ASDF_DIR/bin:$ASDF_DIR/shims:$PATH"
+
 echo "==> Build host: $(uname -a)"
 echo "==> HOME: $HOME"
-echo "==> Versions: asdf=$ASDF_REF otp=$OTP_VERSION elixir=$ELIXIR_VERSION"
+echo "==> Versions: asdf=$ASDF_VERSION otp=$OTP_VERSION elixir=$ELIXIR_VERSION"
 
 # --- 1. asdf -----------------------------------------------------------------
 if [ -d "$ASDF_DIR" ]; then
   echo "==> $ASDF_DIR already exists; refusing to clobber. Move it aside and rerun." >&2
   exit 1
 fi
-echo "==> Cloning asdf $ASDF_REF"
-git clone --depth 1 --branch "$ASDF_REF" https://github.com/asdf-vm/asdf.git "$ASDF_DIR"
-
-# shellcheck disable=SC1091
-. "$ASDF_DIR/asdf.sh"
+echo "==> Downloading asdf $ASDF_VERSION (linux-$ASDF_ARCH)"
+mkdir -p "$ASDF_DIR/bin"
+ASDF_TARBALL="asdf-${ASDF_VERSION}-linux-${ASDF_ARCH}.tar.gz"
+curl -fsSL \
+  "https://github.com/asdf-vm/asdf/releases/download/${ASDF_VERSION}/${ASDF_TARBALL}" \
+  | tar -xz -C "$ASDF_DIR/bin"
+chmod +x "$ASDF_DIR/bin/asdf"
+asdf --version
 
 # --- 2. Build deps for OTP ---------------------------------------------------
 # kerl (used by asdf-erlang) needs these. Apt-get may already have most of them
 # in the CCW image; install what's missing.
+# Skip /etc/apt/sources.list.d/ entirely so broken third-party PPAs on the
+# build host (e.g. deadsnakes, ondrej/php returning 403) can't fail the build.
 echo "==> Installing OTP build deps (sudo apt-get)"
-sudo apt-get update -qq
-sudo apt-get install -y --no-install-recommends \
+APT_OPTS=(-o "Dir::Etc::SourceParts=/dev/null")
+sudo apt-get "${APT_OPTS[@]}" update -qq
+sudo apt-get "${APT_OPTS[@]}" install -y --no-install-recommends \
   build-essential autoconf m4 libncurses-dev libssl-dev \
   libwxgtk3.2-dev libgl1-mesa-dev libglu1-mesa-dev libpng-dev \
   libssh-dev unixodbc-dev xsltproc fop libxml2-utils \
   unzip curl ca-certificates git
 
-# --- 3. Erlang ---------------------------------------------------------------
-echo "==> Adding asdf erlang plugin"
-asdf plugin add erlang https://github.com/asdf-vm/asdf-erlang.git
-echo "==> Installing Erlang/OTP $OTP_VERSION (this is the slow step)"
-KERL_BUILD_DOCS=no KERL_INSTALL_MANPAGES=no KERL_INSTALL_HTMLDOCS=no \
-  asdf install erlang "$OTP_VERSION"
-asdf global erlang "$OTP_VERSION"
+# --- 3. Pin tool versions up-front ------------------------------------------
+# `asdf install` (no args) reads $HOME/.tool-versions and installs each entry.
+# Writing it now means we can install both tools with one command and the file
+# is in the right place for the runtime smoke test.
+cat > "$HOME/.tool-versions" <<EOF
+erlang $OTP_VERSION
+elixir $ELIXIR_VERSION
+EOF
 
-# --- 4. Elixir ---------------------------------------------------------------
-echo "==> Adding asdf elixir plugin"
+# --- 4. Plugins + installs ---------------------------------------------------
+echo "==> Adding asdf erlang and elixir plugins"
+asdf plugin add erlang https://github.com/asdf-vm/asdf-erlang.git
 asdf plugin add elixir https://github.com/asdf-vm/asdf-elixir.git
-echo "==> Installing Elixir $ELIXIR_VERSION"
-asdf install elixir "$ELIXIR_VERSION"
-asdf global elixir "$ELIXIR_VERSION"
+
+echo "==> Installing Erlang/OTP $OTP_VERSION (this is the slow step) and Elixir $ELIXIR_VERSION"
+KERL_BUILD_DOCS=no KERL_INSTALL_MANPAGES=no KERL_INSTALL_HTMLDOCS=no \
+  asdf install
 
 asdf reshim
 
