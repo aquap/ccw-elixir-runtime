@@ -45,8 +45,12 @@ git clone --depth 1 --branch "$ASDF_REF" https://github.com/asdf-vm/asdf.git "$A
 # kerl (used by asdf-erlang) needs these. Apt-get may already have most of them
 # in the CCW image; install what's missing.
 echo "==> Installing OTP build deps (sudo apt-get)"
-sudo apt-get update -qq
-sudo apt-get install -y --no-install-recommends \
+# Skip /etc/apt/sources.list.d/ entirely so broken third-party PPAs on the
+# build host (e.g. deadsnakes, ondrej/php returning 403) can't fail the build.
+# We only need the main Ubuntu archive in /etc/apt/sources.list.
+APT_OPTS=(-o "Dir::Etc::SourceParts=/dev/null")
+sudo apt-get "${APT_OPTS[@]}" update -qq
+sudo apt-get "${APT_OPTS[@]}" install -y --no-install-recommends \
   build-essential autoconf m4 libncurses-dev libssl-dev \
   libwxgtk3.2-dev libgl1-mesa-dev libglu1-mesa-dev libpng-dev \
   libssh-dev unixodbc-dev xsltproc fop libxml2-utils \

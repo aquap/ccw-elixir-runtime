@@ -34,12 +34,36 @@ for otp_root in "$ASDF_DIR"/installs/erlang/*/; do
   fi
 done
 
-# --- 2. Reshim asdf so $ASDF_DIR/shims is current ---------------------------
+# --- 2. Pin tool versions ----------------------------------------------------
+# `asdf global` (run at build time) writes $HOME/.tool-versions, but that file
+# lives outside $ASDF_DIR so it isn't in the tarball. Without it, asdf shims
+# fail with "No version is set for command erl". Recreate it from versions.env
+# (idempotent; preserves any unrelated entries the user already has).
+# shellcheck disable=SC1091
+. "$RUNTIME_DIR/versions.env"
+TOOL_VERSIONS="$HOME/.tool-versions"
+touch "$TOOL_VERSIONS"
+pin_tool() {
+  local tool="$1" version="$2"
+  if grep -qE "^${tool}( |\$)" "$TOOL_VERSIONS"; then
+    if ! grep -qE "^${tool} ${version}\$" "$TOOL_VERSIONS"; then
+      sed -i.bak -E "s|^${tool} .*|${tool} ${version}|" "$TOOL_VERSIONS"
+      rm -f "${TOOL_VERSIONS}.bak"
+    fi
+  else
+    printf '%s %s\n' "$tool" "$version" >> "$TOOL_VERSIONS"
+  fi
+}
+pin_tool erlang "$OTP_VERSION"
+pin_tool elixir "$ELIXIR_VERSION"
+echo "setup.sh: pinned $TOOL_VERSIONS to erlang $OTP_VERSION, elixir $ELIXIR_VERSION"
+
+# --- 3. Reshim asdf so $ASDF_DIR/shims is current ---------------------------
 # shellcheck disable=SC1091
 . "$ASDF_DIR/asdf.sh"
 asdf reshim >/dev/null 2>&1 || true
 
-# --- 3. Wire ~/.bashrc (idempotent) -----------------------------------------
+# --- 4. Wire ~/.bashrc (idempotent) -----------------------------------------
 BASHRC="$HOME/.bashrc"
 touch "$BASHRC"
 if ! grep -qF "$MARKER" "$BASHRC"; then
@@ -57,7 +81,7 @@ else
   echo "setup.sh: ~/.bashrc already wired"
 fi
 
-# --- 4. Start hex_proxy ------------------------------------------------------
+# --- 5. Start hex_proxy ------------------------------------------------------
 if ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${PROXY_PORT}\$"; then
   echo "setup.sh: hex_proxy already listening on :${PROXY_PORT}"
 else
@@ -73,7 +97,7 @@ else
   done
 fi
 
-# --- 5. Smoke test -----------------------------------------------------------
+# --- 6. Smoke test -----------------------------------------------------------
 echo "setup.sh: smoke test"
 erl -noshell -eval 'io:format("erl ok ~s~n", [erlang:system_info(otp_release)]), halt().'
 elixir -e 'IO.puts("elixir ok " <> System.version())'
