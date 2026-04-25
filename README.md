@@ -36,7 +36,8 @@ will work against the proxy automatically.
 
 See [`versions.env`](versions.env). Current:
 
-- asdf `v0.14.1`
+- asdf `v0.19.0` (Go binary; the bash-era `asdf.sh` is gone, so the bashrc
+  snippet now just puts `~/.asdf/bin` and `~/.asdf/shims` on `PATH`).
 - Erlang/OTP `27.2`
 - Elixir `1.18.3-otp-27`
 

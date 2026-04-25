@@ -2,7 +2,10 @@
 # Run after the runtime tarball is extracted into $HOME.
 #
 # - Relocates OTP (it bakes absolute paths at build time) for the current $HOME.
-# - Wires asdf, HEX_MIRROR_URL, and a UTF-8 locale into ~/.bashrc (idempotent).
+# - Pins erlang/elixir in $HOME/.tool-versions so asdf shims resolve.
+# - Wires asdf shims, HEX_MIRROR_URL, and a UTF-8 locale into ~/.bashrc
+#   (idempotent; the marker block is rewritten on each run so upgrades pick
+#   up changes).
 # - Starts the hex.pm proxy in the background.
 #
 # Safe to re-run; everything is guarded.
@@ -22,6 +25,15 @@ if [ ! -d "$ASDF_DIR" ] || [ ! -d "$RUNTIME_DIR" ]; then
   echo "setup.sh: expected $ASDF_DIR and $RUNTIME_DIR to exist; did extraction succeed?" >&2
   exit 1
 fi
+if [ ! -x "$ASDF_DIR/bin/asdf" ]; then
+  echo "setup.sh: $ASDF_DIR/bin/asdf is missing or not executable" >&2
+  exit 1
+fi
+
+# asdf 0.16+ has no asdf.sh — shims live at $ASDF_DIR/shims and the binary at
+# $ASDF_DIR/bin/asdf. Both must be on PATH for the rest of this script.
+export ASDF_DATA_DIR="$ASDF_DIR"
+export PATH="$ASDF_DIR/bin:$ASDF_DIR/shims:$PATH"
 
 # --- 1. Relocate OTP ---------------------------------------------------------
 # OTP's `Install` script rewrites the absolute paths baked into erts/bin/erl
@@ -35,10 +47,10 @@ for otp_root in "$ASDF_DIR"/installs/erlang/*/; do
 done
 
 # --- 2. Pin tool versions ----------------------------------------------------
-# `asdf global` (run at build time) writes $HOME/.tool-versions, but that file
-# lives outside $ASDF_DIR so it isn't in the tarball. Without it, asdf shims
-# fail with "No version is set for command erl". Recreate it from versions.env
-# (idempotent; preserves any unrelated entries the user already has).
+# The tarball doesn't include $HOME/.tool-versions (it lives outside $ASDF_DIR).
+# Without it, asdf shims fail with "No version is set for command erl".
+# Recreate it from versions.env (idempotent; preserves any unrelated entries
+# the user already has).
 # shellcheck disable=SC1091
 . "$RUNTIME_DIR/versions.env"
 TOOL_VERSIONS="$HOME/.tool-versions"
@@ -58,28 +70,31 @@ pin_tool erlang "$OTP_VERSION"
 pin_tool elixir "$ELIXIR_VERSION"
 echo "setup.sh: pinned $TOOL_VERSIONS to erlang $OTP_VERSION, elixir $ELIXIR_VERSION"
 
-# --- 3. Reshim asdf so $ASDF_DIR/shims is current ---------------------------
-# shellcheck disable=SC1091
-. "$ASDF_DIR/asdf.sh"
+# --- 3. Reshim so $ASDF_DIR/shims is current --------------------------------
 asdf reshim >/dev/null 2>&1 || true
 
-# --- 4. Wire ~/.bashrc (idempotent) -----------------------------------------
+# --- 4. Wire ~/.bashrc (idempotent, self-updating) --------------------------
+# Always rewrite the marker block so older installs (which sourced the now-gone
+# asdf.sh) get the new PATH-based snippet.
 BASHRC="$HOME/.bashrc"
 touch "$BASHRC"
-if ! grep -qF "$MARKER" "$BASHRC"; then
-  echo "setup.sh: appending env to $BASHRC"
-  cat >> "$BASHRC" <<EOF
+if grep -qF "$MARKER" "$BASHRC"; then
+  sed -i.bak "/$MARKER/,/$ENDMARK/d" "$BASHRC"
+  rm -f "${BASHRC}.bak"
+  # Drop a trailing blank line if we just left one behind.
+  sed -i -e ':a' -e '/^\n*$/{$d;N;ba' -e '}' "$BASHRC"
+fi
+cat >> "$BASHRC" <<EOF
 
 $MARKER
 export LC_ALL=C.UTF-8
 export LANG=C.UTF-8
-. "\$HOME/.asdf/asdf.sh"
+export ASDF_DATA_DIR="\$HOME/.asdf"
+export PATH="\$HOME/.asdf/bin:\$HOME/.asdf/shims:\$PATH"
 export HEX_MIRROR_URL=http://127.0.0.1:${PROXY_PORT}
 $ENDMARK
 EOF
-else
-  echo "setup.sh: ~/.bashrc already wired"
-fi
+echo "setup.sh: wrote env block to $BASHRC"
 
 # --- 5. Start hex_proxy ------------------------------------------------------
 if ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${PROXY_PORT}\$"; then
